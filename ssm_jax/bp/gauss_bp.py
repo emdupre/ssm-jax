@@ -1,4 +1,5 @@
 from jax import numpy as jnp
+from jax import tree_map
 
 def block_split(A, idx):
     """Split square matrix A into four blocks at `idx`
@@ -32,6 +33,17 @@ def block_split(A, idx):
     # followed by a tree_flatten
     return blocks
 
+
+def block_join(A11, A12, A21, A22):
+    return jnp.block([[A11, A12],[A21,A22]])
+
+def block_rev(A,idx):
+    blocks = block_split(A,idx)
+    return block_join(*blocks[::-1])
+
+def vec_swap(a,idx):
+    return jnp.concatenate((a[idx:],a[:idx]))
+
 def info_marginalise(K, h, idx):
     """Calculate the parameters of marginalised MVN.
     
@@ -63,7 +75,16 @@ def info_marginalise(K, h, idx):
     return K1_marg, h1_marg
 
 def info_condition(K, h, y):
-    """Calculate the parameters of MVN after conditioning."""
+    """Calculate the parameters of MVN after conditioning.
+
+    For x,y with joint mvn
+        p(x,y) = Nc(x,y | h, K),
+    the distribution of x condition on a particular value of y is given by,
+        p(x|y) = Nc(x | h_cond, K_cond),
+    where
+        h_cond = h1 - K12 y
+        K_cond = K11
+    """
     idx = len(h) - len(y)
     K11, K12, *_ = block_split(K, idx)
     h1 = h[:idx]
@@ -80,27 +101,27 @@ def potential_from_conditional_linear_gaussian(A,u,Lambda):
 
     Args:
         A (dim1, dim2)
-        u (dim1, 1)
+        u (dim1,1)
         Lambda (dim1, dim1)
     Returns:
         K (dim1 + dim2, dim1 + dim2)
-        h (dim1 + dim2, 1)
+        h (dim1 + dim2,1)
     """
     dim_y, _ = A.shape
     I = jnp.eye(dim_y)
     IA = jnp.vstack((I, -A.T))
     K = IA @ Lambda @ IA.T
     Lu  = Lambda @ u
-    h = jnp.vstack((Lu, -A.T @ Lu))
+    h = jnp.concatenate((Lu, -A.T @ Lu))
     return K, h
 
 
 def info_multiply(params1, params2):
     """Calculate parameters resulting from multiplying gaussians."""
-    return jax.tree_map(lambda a,b: a + b, params1, params2)
+    return tree_map(lambda a,b: a + b, params1, params2)
 
 
 def info_divide(params1, params2):
     """Calculate parameters resulting from dividing gaussians."""
-    return jax.tree_map(lambda a,b: a - b, params1, params2)
+    return tree_map(lambda a,b: a - b, params1, params2)
 
