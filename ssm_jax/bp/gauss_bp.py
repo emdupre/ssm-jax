@@ -44,50 +44,52 @@ def block_rev(A,idx):
 def vec_swap(a,idx):
     return jnp.concatenate((a[idx:],a[:idx]))
 
-def info_marginalise(K, h, idx):
+def info_marginalise(K_blocks, hs):
     """Calculate the parameters of marginalised MVN.
     
     For x1, x2 joint distributed as
         p(x1, x2) = Nc(x1,x2| h, K),
     the marginal distribution of x1 is given by:
-        p(x1) = \int p(x1, x2) dx2 = Nc(x1 | h1_marg, K1_marg)
+        p(x2) = \int p(x1, x2) dx1 = Nc(x2 | h2_marg, K2_marg)
     where,
-        h1_marg = h2 - K21 K11^{-1} h1
-        K1_marg = K22 - K21 K11^{-1} K12
-        h = (h1 h2)^T
-        K = (K11; K12, K21; K22)
+        h2_marg = h2 - K21 K11^{-1} h1
+        K2_marg = K22 - K21 K11^{-1} K12
 
     Args:
-        K (D, D): joint precision matrix.
-        h (D,1): joint precision weighted mean.
-        idx: the index which divides the joint x into (x1,x2),
-              equal to `len(x1) + 1`.
+        K_blocks: blocks of the joint precision matrix, (K1, K12, K22),
+                    K1 (dim1,dim1),
+                    K12 (dim1, dim2),
+                    K22 (dim2, dim2).
+        hs (D,1): joint precision weighted mean, (h1, h2):
+                    h1 (dim1, 1),
+                    h2 (dim2, 1).
     Returns:
-        K1_marg (dim1, dim1): marginal precision matrix.
-        h1_marg (dim1,1): marginal precision weighted mean.
+        K2_marg (dim2, dim2): marginal precision matrix.
+        h2_marg (dim2,1): marginal precision weighted mean.
     """
-    K11, K12, K21, K22 = block_split(K, idx)
-    h1 = h[:idx]
-    h2 = h[idx:]
+    K11, K12, K22 = K_blocks
+    h1, h2 = hs 
     G = jnp.linalg.solve(K11,K12)
-    K1_marg = K22 - K21 @ G
-    h1_marg = h2 - G.T @ h1
-    return K1_marg, h1_marg
+    K2_marg = K22 - K12.T @ G
+    h2_marg = h2 - G.T @ h1
+    return K2_marg, h2_marg
 
-def info_condition(K, h, y):
+def info_condition(K11, K12, h1, y):
+    # TODO: Decide on (x1, x2) vs (x,y)
     """Calculate the parameters of MVN after conditioning.
 
     For x,y with joint mvn
-        p(x,y) = Nc(x,y | h, K),
+        p(x1,x2) = Nc(x1,x2 | h, K),
+    where h, K can be partitioned into,
+        h = [h1, h2]
+        K = [[K11, K12],
+            [[K21, K22]]
     the distribution of x condition on a particular value of y is given by,
-        p(x|y) = Nc(x | h_cond, K_cond),
+        p(x1|x2) = Nc(x1 | h1_cond, K1_cond),
     where
-        h_cond = h1 - K12 y
-        K_cond = K11
+        h1_cond = h1 - K12 x2
+        K1_cond = K11
     """
-    idx = len(h) - len(y)
-    K11, K12, *_ = block_split(K, idx)
-    h1 = h[:idx]
     return K11, h1 - K12 @ y
 
 def potential_from_conditional_linear_gaussian(A,u,Lambda):
@@ -107,13 +109,14 @@ def potential_from_conditional_linear_gaussian(A,u,Lambda):
         K (dim1 + dim2, dim1 + dim2)
         h (dim1 + dim2,1)
     """
-    dim_y, _ = A.shape
-    I = jnp.eye(dim_y)
-    IA = jnp.vstack((I, -A.T))
-    K = IA @ Lambda @ IA.T
-    Lu  = Lambda @ u
-    h = jnp.concatenate((Lu, -A.T @ Lu))
-    return K, h
+    Kyy = Lambda 
+    Kyz  = -Lambda @ A
+    Kzz = -A.T @ Kyz
+    hy = Lambda @ u 
+    hz = -A.T @ hy
+    # TODO: Might be more natural to frame this the other way round, return. (x2 | x1)
+    #        or at least just return Kzy because we tend to want to condition on y.
+    return (Kyy, Kyz, Kzz), (hy,hz)
 
 
 def info_multiply(params1, params2):
