@@ -1,9 +1,11 @@
 from jax import numpy as jnp
-from jax import tree_map
+from jax.tree_util import tree_map
+
+
 
 def block_split(A, idx):
     """Split square matrix A into four blocks at `idx`
-    
+
     For example splitting
         [[0, 1, 2],
          [3, 4, 5],
@@ -25,9 +27,9 @@ def block_split(A, idx):
        where `dim1 + dim2 == D` and `dim2 = D - idx`.
     """
     split_array = jnp.array([idx])
-    vblocks = jnp.vsplit(A,split_array)
+    vblocks = jnp.vsplit(A, split_array)
     # [leaf for tree in forest for leaf in tree]
-    blocks = [block for vblock in vblocks for block in jnp.hsplit(vblock,split_array)]
+    blocks = [block for vblock in vblocks for block in jnp.hsplit(vblock, split_array)]
     # Can also do:
     #   blocks = tree_map(lambda arr: jnp.hsplit(arr,split_array),vblocks)
     # followed by a tree_flatten
@@ -35,18 +37,21 @@ def block_split(A, idx):
 
 
 def block_join(A11, A12, A21, A22):
-    return jnp.block([[A11, A12],[A21,A22]])
+    return jnp.block([[A11, A12], [A21, A22]])
 
-def block_rev(A,idx):
-    blocks = block_split(A,idx)
+
+def block_rev(A, idx):
+    blocks = block_split(A, idx)
     return block_join(*blocks[::-1])
 
-def vec_swap(a,idx):
-    return jnp.concatenate((a[idx:],a[:idx]))
+
+def vec_swap(a, idx):
+    return jnp.concatenate((a[idx:], a[:idx]))
+
 
 def info_marginalise(K_blocks, hs):
     """Calculate the parameters of marginalised MVN.
-    
+
     For x1, x2 joint distributed as
         p(x1, x2) = Nc(x1,x2| h, K),
     the marginal distribution of x1 is given by:
@@ -56,8 +61,8 @@ def info_marginalise(K_blocks, hs):
         K2_marg = K22 - K21 K11^{-1} K12
 
     Args:
-        K_blocks: blocks of the joint precision matrix, (K1, K12, K22),
-                    K1 (dim1,dim1),
+        K_blocks: blocks of the joint precision matrix, (K11, K12, K22),
+                    K11 (dim1,dim1),
                     K12 (dim1, dim2),
                     K22 (dim2, dim2).
         hs (D,1): joint precision weighted mean, (h1, h2):
@@ -68,11 +73,21 @@ def info_marginalise(K_blocks, hs):
         h2_marg (dim2,1): marginal precision weighted mean.
     """
     K11, K12, K22 = K_blocks
-    h1, h2 = hs 
-    G = jnp.linalg.solve(K11,K12)
+    h1, h2 = hs
+    G = jnp.linalg.solve(K11, K12)
     K2_marg = K22 - K12.T @ G
     h2_marg = h2 - G.T @ h1
     return K2_marg, h2_marg
+
+
+def info_marginalise_down(K_blocks, hs):
+    K11, K12, K22 = K_blocks
+    h1, h2 = hs 
+    G = jnp.linalg.solve(K22,K12.T)
+    K1_marg = K11 - K12 @ G
+    h1_marg = h1 - G.T @ h2
+    return K1_marg, h1_marg
+
 
 def info_condition(K11, K12, h1, y):
     # TODO: Decide on (x1, x2) vs (x,y)
@@ -92,9 +107,10 @@ def info_condition(K11, K12, h1, y):
     """
     return K11, h1 - K12 @ y
 
-def potential_from_conditional_linear_gaussian(A,u,Lambda):
+
+def potential_from_conditional_linear_gaussian(A, u, Lambda):
     """Express a conditional linear gaussian as a potential in canonical form.
-    
+
     p(y|z) = N(y | Az + u, Lambda^{-1})
            \prop exp( -0.5(y z)^T K (y z) + (y z)^T h )
     where,
@@ -109,22 +125,19 @@ def potential_from_conditional_linear_gaussian(A,u,Lambda):
         K (dim1 + dim2, dim1 + dim2)
         h (dim1 + dim2,1)
     """
-    Kyy = Lambda 
-    Kyz  = -Lambda @ A
-    Kzz = -A.T @ Kyz
-    hy = Lambda @ u 
+    Kzy = -A.T @ Lambda
+    Kzz = -Kzy @ A
+    Kyy = Lambda
+    hy = Lambda @ u
     hz = -A.T @ hy
-    # TODO: Might be more natural to frame this the other way round, return. (x2 | x1)
-    #        or at least just return Kzy because we tend to want to condition on y.
-    return (Kyy, Kyz, Kzz), (hy,hz)
+    return (Kzz, Kzy, Kyy), (hz, hy)
 
 
 def info_multiply(params1, params2):
     """Calculate parameters resulting from multiplying gaussians."""
-    return tree_map(lambda a,b: a + b, params1, params2)
+    return tree_map(lambda a, b: a + b, params1, params2)
 
 
 def info_divide(params1, params2):
     """Calculate parameters resulting from dividing gaussians."""
-    return tree_map(lambda a,b: a - b, params1, params2)
-
+    return tree_map(lambda a, b: a - b, params1, params2)
