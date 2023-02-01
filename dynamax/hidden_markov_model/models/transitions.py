@@ -13,6 +13,11 @@ class ParamsStandardHMMTransitions(NamedTuple):
     transition_matrix: Union[Float[Array, "state_dim state_dim"], ParameterProperties]
 
 
+class ParamsStandardHMMBiasTransitions(NamedTuple):
+    transition_matrix: Union[Float[Array, "state_dim state_dim"], ParameterProperties]
+    bias: Float[Array, "state_dim"]
+
+
 class StandardHMMTransitions(HMMTransitions):
     r"""Standard model for HMM transitions.
 
@@ -160,3 +165,100 @@ class StandardHMMSparseTransitions(StandardHMMTransitions):
                 transition_matrix = SafeDirichlet(self.concentration + expected_trans_counts).mode()
             params = params._replace(transition_matrix=transition_matrix)
         return params, m_step_state
+
+
+class StandardHMMBiasSparseTransitions(StandardHMMSparseTransitions):
+    r"""Standard model for HMM with sparse transitions.
+
+    We place a Dirichlet prior over the non-zero entries of the transition matrix $A$,
+
+    $$A_k \sim \mathrm{Dir}(\beta 1_K + \kappa e_k)$$
+
+    where
+
+    * $1_K$ denotes a length-$K$ vector of ones,
+    * $e_k$ denotes the one-hot vector with a 1 in the $k$-th position,
+    * $\beta \in \mathbb{R}_+$ is the concentration, and
+    * $\kappa \in \mathbb{R}_+$ is the `stickiness`.
+
+
+
+    """
+    def __init__(self, num_states, mask, concentration=1.1, stickiness=0.0):
+        """
+        transition_matrix[j,k]: prob(hidden(t) = k | hidden(t-1)j)
+
+        Args:
+            mask (_type_): _description_
+        """
+        self.num_states = num_states
+
+        if mask.shape == (self.num_states, self.num_states):
+            self.mask = mask.astype(bool)
+        else:
+            raise ValueError(f"Mask does not have valid shape for {self.num_states}")
+
+        concentration * jnp.ones((num_states, num_states)) + \
+                stickiness * jnp.eye(num_states)
+        self.concentration = concentration * self.mask
+
+    def _compute_transition_matrices(self, params, inputs=None):
+        if inputs:  # if global states are provided
+            bias_transition_matrices = jnp.tile(
+                params.transition_matrix, (len(inputs), 1, 1))
+
+            for i, ind in enumerate(inputs):
+                col = bias_transition_matrices[i][:,ind]
+                update = jnp.exp(jnp.log(col) + params.bias)
+                bias_transition_matrices = bias_transition_matrices.at[i,:,ind].set(
+                    update)
+                normed_mtx = (bias_transition_matrices[i].T / jnp.sum(
+                    bias_transition_matrices[i], axis=1)).T
+                bias_transition_matrices = bias_transition_matrices.at[i].set(
+                    normed_mtx)
+        return bias_transition_matrices
+
+    # TODO : Confirm if `inputs` should be passed as `probs`
+    def distribution(self, params, state, inputs=None):
+        return tfd.Categorical(probs=params.transition_matrix[state])
+
+    def initialize(self, key=None, method="prior", transition_matrix=None, bias=0):
+        """
+        Initialize the model parameters and their corresponding properties.
+
+        Args:
+            transition_matrix (_type_, optional): _description_. Defaults to None.
+
+        Returns:
+            _type_: _description_
+        """
+        if transition_matrix is not None:
+            for t, m in zip(jnp.nonzero(transition_matrix), jnp.nonzero(self.mask)):
+                if not jnp.array_equal(t, m):
+                    raise ValueError(
+                        "Provided transition matrix has non-zero values outside of mask")
+        
+        if transition_matrix is None:
+            this_key, key = jr.split(key)
+            transition_matrix = SafeDirichlet(self.concentration).sample(seed=this_key)
+
+        # Package the results into dictionaries
+        params = ParamsStandardHMMBiasTransitions(transition_matrix=transition_matrix, bias=bias)
+        props = ParamsStandardHMMTransitions(transition_matrix=ParameterProperties(constrainer=tfb.SoftmaxCentered()))
+        return params, props
+
+    # IDEA : Some day add prior on bias in log_prior
+    def log_prior(self, params):
+        return SafeDirichlet(self.concentration).log_prob(params.transition_matrix).sum()
+
+    # Don't use for now
+    def m_step(self, params, props, batch_stats, m_step_state):
+        # if props.transition_matrix.trainable:
+        #     if self.num_states == 1:
+        #         transition_matrix = jnp.array([[1.0]])
+        #     else:
+        #         expected_trans_counts = batch_stats.sum(axis=0)
+        #         transition_matrix = SafeDirichlet(self.concentration + expected_trans_counts).mode()
+        #     params = params._replace(transition_matrix=transition_matrix)
+        # return params, m_step_state
+        pass

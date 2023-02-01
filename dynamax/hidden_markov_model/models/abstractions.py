@@ -6,6 +6,7 @@ from dynamax.parameters import ParameterSet, PropertySet
 from dynamax.hidden_markov_model.inference import HMMPosterior, HMMPosteriorFiltered
 from dynamax.hidden_markov_model.inference import hmm_filter
 from dynamax.hidden_markov_model.inference import hmm_posterior_mode
+from dynamax.hidden_markov_model.inference import hmm_posterior_sample
 from dynamax.hidden_markov_model.inference import hmm_smoother
 from dynamax.hidden_markov_model.inference import hmm_two_filter_smoother
 from dynamax.utils.optimize import run_gradient_descent
@@ -560,6 +561,9 @@ class HMM(SSM):
 
     def most_likely_states(self, params, emissions, inputs=None):
         return hmm_posterior_mode(*self._inference_args(params, emissions, inputs))
+
+    def posterior_sample(self, params, emissions, inputs=None):
+        return hmm_posterior_sample(*self._inference_args(params, emissions, inputs))
 
     def filter(self, params, emissions, inputs=None):
         return hmm_filter(*self._inference_args(params, emissions, inputs))
