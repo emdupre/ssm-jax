@@ -7,6 +7,9 @@ import numpy as np
 from augly import image
 from typing import Tuple, Union
 from multiprocessing import Pool
+import jax.random as jr
+import jax.numpy as jnp
+from jax import vmap
 
 class DataAugmentationFactory:
     """
@@ -81,7 +84,7 @@ class DataAugmentationFactory:
         return dataset_proc.reshape(num_elements, -1)
 
 
-def load_mnist(root="./data", download=False):
+def load_mnist(root="./data", download=True):
     mnist_train = torchvision.datasets.MNIST(root=root, train=True, download=download)
     images = np.array(mnist_train.data) / 255.0
     labels = mnist_train.targets
@@ -147,3 +150,43 @@ def load_rotated_mnist(
     train = (X_train, y_train)
     test = (X_test, y_test)
     return train, test
+
+
+def load_1d_synthetic_dataset(n_train=100, n_test=100, key=0, sort_data=True):
+    if isinstance(key, int):
+        key = jr.PRNGKey(key)
+    key1, key2, subkey1, subkey2, key_shuffle = jr.split(key, 5)
+
+    X_train = jr.uniform(key1, shape=(2*n_train, 1), minval=0.0, maxval=0.5)
+    X_test = jr.uniform(key2, shape=(n_test, 1), minval=0.0, maxval=0.5)
+    
+    def generating_function(key, x):
+        epsilons = jr.normal(key, shape=(3,))*0.02
+        return (x + 0.3*jnp.sin(2*jnp.pi*(x+epsilons[0])) + 
+                0.3*jnp.sin(4*jnp.pi*(x+epsilons[1])) + epsilons[2])
+    
+    keys_train = jr.split(subkey1, X_train.shape[0])
+    keys_test = jr.split(subkey2, X_test.shape[0])
+    y_train = vmap(generating_function)(keys_train, X_train)
+    y_test = vmap(generating_function)(keys_test, X_test)
+
+    # Standardize dataset
+    X_train = (X_train - X_train.mean()) / X_train.std()
+    y_train = (y_train - y_train.mean()) / y_train.std()
+    X_test = (X_test - X_test.mean()) / X_test.std()
+    y_test = (y_test - y_test.mean()) / y_test.std()
+
+    sorted_idx = jnp.argsort(X_train.squeeze())
+    train_idx = jnp.concatenate([
+        sorted_idx[:n_train//2], sorted_idx[2*n_train - n_train//2:]
+    ])
+
+    X_train, y_train = X_train[train_idx], y_train[train_idx]
+
+    if not sort_data:
+        n_train = len(X_train)
+        ixs = jr.choice(key_shuffle, shape=(n_train,), a=n_train)
+        X_train = X_train[ixs]
+        y_train = y_train[ixs]
+
+    return (X_train, y_train), (X_test, y_test)
